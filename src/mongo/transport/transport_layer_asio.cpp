@@ -447,8 +447,20 @@ public:
         //
         // Then, if the numeric (IP address) lookup failed, we fall back to DNS or return the error
         // from the resolver.
+        Date_t timeBefore = Date_t::now();
         return _resolve(peer, flags | Resolver::numeric_host, enableIPv6)
-            .onError([=](Status) { return _resolve(peer, flags, enableIPv6); })
+            .onError([=](Status status) {
+                Date_t timeAfter = Date_t::now();
+                LOGV2_WARNING(23019,
+                              "resolve DNS resolution with numeric_host failed, peer: {peer}, "
+                              "status: {status}, enableIPv6: {enableIPv6}",
+                              "resolve DNS resolution with numeric_host failed",
+                              "peer"_attr = peer,
+                              "status"_attr = status,
+                              "enableIPv6"_attr = enableIPv6,
+                              "duration"_attr = timeAfter - timeBefore);
+                return _resolve(peer, flags, enableIPv6);
+            })
             .getNoThrow();
     }
 
@@ -480,7 +492,49 @@ private:
         return boost::none;
     }
 
+    std::string flagsToString(Resolver::flags flags) {
+        std::string result;
+
+        if (flags == 0) {
+            result = "none";
+        } else {
+            if (flags & Resolver::address_configured) {
+                if (!result.empty())
+                    result += " | ";
+                result += "address_configured";
+            }
+            if (flags & Resolver::all_matching) {
+                if (!result.empty())
+                    result += " | ";
+                result += "all_matching";
+            }
+            if (flags & Resolver::canonical_name) {
+                if (!result.empty())
+                    result += " | ";
+                result += "canonical_name";
+            }
+            if (flags & Resolver::numeric_host) {
+                if (!result.empty())
+                    result += " | ";
+                result += "numeric_host";
+            }
+            if (flags & Resolver::numeric_service) {
+                if (!result.empty())
+                    result += " | ";
+                result += "numeric_service";
+            }
+            if (flags & Resolver::v4_mapped) {
+                if (!result.empty())
+                    result += " | ";
+                result += "v4_mapped";
+            }
+        }
+
+        return result;
+    }
+
     Future<EndpointVector> _resolve(const HostAndPort& peer, Flags flags, bool enableIPv6) {
+        Date_t timeBefore = Date_t::now();
         std::error_code ec;
         auto port = std::to_string(peer.port());
         Results results;
@@ -489,6 +543,17 @@ private:
         } else {
             results = _resolver.resolve(asio::ip::tcp::v4(), peer.host(), port, flags, ec);
         }
+        Date_t timeAfter = Date_t::now();
+
+        LOGV2_INFO(23019,
+                   "sync DNS resolution finished, peer: {peer}, flags: {flags}, enableIPv6: "
+                   "{enableIPv6}, duration: {duration}, ec: {ec}",
+                   "sync DNS resolution finished",
+                   "peer"_attr = peer,
+                   "flags"_attr = flagsToString(flags),
+                   "enableIPv6"_attr = enableIPv6,
+                   "duration"_attr = timeAfter - timeBefore,
+                   "ec"_attr = ec.value());
 
         if (ec) {
             return _makeFuture(errorCodeToStatus(ec), peer);
@@ -498,6 +563,7 @@ private:
     }
 
     Future<EndpointVector> _asyncResolve(const HostAndPort& peer, Flags flags, bool enableIPv6) {
+        Date_t timeBefore = Date_t::now();
         auto port = std::to_string(peer.port());
         Future<Results> ret;
         if (enableIPv6) {
@@ -508,8 +574,31 @@ private:
         }
 
         return std::move(ret)
-            .onError([this, peer](Status status) { return _checkResults(status, peer); })
-            .then([this, peer](Results results) { return _makeFuture(results, peer); });
+            .onError([=](Status status) {
+                Date_t timeAfter = Date_t::now();
+                LOGV2_INFO(23019,
+                           "async DNS resolution failed, peer: {peer}, flags: {flags}, enableIPv6: "
+                           "{enableIPv6}, duration: {duration}, status: {status}",
+                           "async DNS resolution failed",
+                           "peer"_attr = peer,
+                           "flags"_attr = flagsToString(flags),
+                           "enableIPv6"_attr = enableIPv6,
+                           "duration"_attr = timeAfter - timeBefore,
+                           "status"_attr = status);
+                return _checkResults(status, peer);
+            })
+            .then([=](Results results) {
+                Date_t timeAfter = Date_t::now();
+                LOGV2_INFO(23019,
+                           "async DNS resolution finished, peer: {peer}, flags: {flags}, "
+                           "enableIPv6: {enableIPv6}, duration: {duration}",
+                           "async DNS resolution finished",
+                           "peer"_attr = peer,
+                           "flags"_attr = flagsToString(flags),
+                           "enableIPv6"_attr = enableIPv6,
+                           "duration"_attr = timeAfter - timeBefore);
+                return _makeFuture(results, peer);
+            });
     }
 
     using Results = Resolver::results_type;
@@ -573,6 +662,13 @@ StatusWith<SessionHandle> TransportLayerASIO::connect(
     auto swEndpoints = resolver.resolve(peer, _listenerOptions.enableIPv6);
     Date_t timeAfter = Date_t::now();
     if (timeAfter - timeBefore > kSlowOperationThreshold) {
+        LOGV2_WARNING(
+            23019,
+            "connect DNS resolution while connecting to {peer}, enableIPv6 {} took {duration}",
+            "connect DNS resolution while connecting to peer was slow",
+            "peer"_attr = peer,
+            "enableIPv6"_attr = _listenerOptions.enableIPv6,
+            "duration"_attr = timeAfter - timeBefore);
         networkCounter.incrementNumSlowDNSOperations();
     }
 
@@ -641,6 +737,13 @@ StatusWith<SessionHandle> TransportLayerASIO::connect(
         Date_t timeAfter = Date_t::now();
 
         if (timeAfter - timeBefore > kSlowOperationThreshold) {
+            LOGV2_WARNING(23019,
+                          "handshake DNS resolution while connecting to {peer}, enableIPv6 {} took "
+                          "{duration}",
+                          "handshake DNS resolution while connecting to peer was slow",
+                          "peer"_attr = peer,
+                          "enableIPv6"_attr = _listenerOptions.enableIPv6,
+                          "duration"_attr = timeAfter - timeBefore);
             networkCounter.incrementNumSlowSSLOperations();
         }
 
@@ -821,8 +924,8 @@ Future<SessionHandle> TransportLayerASIO::asyncConnect(
                 Date_t timeAfter = Date_t::now();
                 if (timeAfter - timeBefore > kSlowOperationThreshold) {
                     LOGV2_WARNING(23019,
-                                  "DNS resolution while connecting to {peer} took {duration}",
-                                  "DNS resolution while connecting to peer was slow",
+                                  "async DNS resolution while connecting to {peer} took {duration}",
+                                  "async DNS resolution while connecting to peer was slow",
                                   "peer"_attr = connector->peer,
                                   "duration"_attr = timeAfter - timeBefore);
                     networkCounter.incrementNumSlowDNSOperations();
@@ -882,6 +985,13 @@ Future<SessionHandle> TransportLayerASIO::asyncConnect(
                     .then([connector, timeBefore] {
                         Date_t timeAfter = Date_t::now();
                         if (timeAfter - timeBefore > kSlowOperationThreshold) {
+                            LOGV2_WARNING(
+                                23019,
+                                "async handshake DNS resolution while connecting to {peer} took "
+                                "{duration}",
+                                "async handshake DNS resolution while connecting to peer was slow",
+                                "peer"_attr = connector->peer,
+                                "duration"_attr = timeAfter - timeBefore);
                             networkCounter.incrementNumSlowSSLOperations();
                         }
                         return Status::OK();
