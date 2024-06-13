@@ -458,6 +458,7 @@ public:
                               "peer"_attr = peer,
                               "status"_attr = status,
                               "enableIPv6"_attr = enableIPv6,
+                              "log"_attr = "customer",
                               "duration"_attr = timeAfter - timeBefore);
                 return _resolve(peer, flags, enableIPv6);
             })
@@ -466,13 +467,31 @@ public:
 
     Future<EndpointVector> asyncResolve(const HostAndPort& peer, bool enableIPv6) {
         if (auto unixEp = _checkForUnixSocket(peer)) {
+                    LOGV2_WARNING(23019,
+                                  "check peer is unix socket, peer: {peer}, enableIPv6: {enableIPv6}",
+                                  "check peer is unix socket",
+                                  "peer"_attr = peer,
+                                  "enableIPv6"_attr = enableIPv6,
+                                  "log"_attr = "customer");
             return *unixEp;
         }
 
         // We follow the same numeric -> hostname fallback procedure as the synchronous resolver
         // function for setting resolver flags (see above).
         const auto flags = Resolver::numeric_service;
-        return _asyncResolve(peer, flags | Resolver::numeric_host, enableIPv6).onError([=](Status) {
+                Date_t timeBefore = Date_t::now();
+                return _asyncResolve(peer, flags | Resolver::numeric_host, enableIPv6).onError([=](Status status) {
+                    Date_t timeAfter = Date_t::now();
+                    LOGV2_INFO(23019,
+                               "async DNS resolution error, peer: {peer}, flags: {flags}, enableIPv6: {enableIPv6}, duration: {duration}, status: {status}",
+                               "async DNS resolution error",
+                               "peer"_attr = peer,
+                               "flags"_attr = flagsToString(flags),
+                               "enableIPv6"_attr = enableIPv6,
+                               "duration"_attr = timeAfter - timeBefore,
+                               "log"_attr = "customer",
+                               "status"_attr = status
+                    );
             return _asyncResolve(peer, flags, enableIPv6);
         });
     }
@@ -553,7 +572,9 @@ private:
                    "flags"_attr = flagsToString(flags),
                    "enableIPv6"_attr = enableIPv6,
                    "duration"_attr = timeAfter - timeBefore,
-                   "ec"_attr = ec.value());
+                   "log"_attr = "customer",
+                   "ec"_attr = ec.value()
+                );
 
         if (ec) {
             return _makeFuture(errorCodeToStatus(ec), peer);
@@ -576,27 +597,31 @@ private:
         return std::move(ret)
             .onError([=](Status status) {
                 Date_t timeAfter = Date_t::now();
-                LOGV2_INFO(23019,
-                           "async DNS resolution failed, peer: {peer}, flags: {flags}, enableIPv6: "
-                           "{enableIPv6}, duration: {duration}, status: {status}",
-                           "async DNS resolution failed",
-                           "peer"_attr = peer,
-                           "flags"_attr = flagsToString(flags),
-                           "enableIPv6"_attr = enableIPv6,
-                           "duration"_attr = timeAfter - timeBefore,
-                           "status"_attr = status);
+                LOGV2_WARNING(23019,
+                              "async DNS resolution failed, peer: {peer}, flags: {flags}, enableIPv6: "
+                              "{enableIPv6}, duration: {duration}, status: {status}",
+                              "async DNS resolution failed",
+                              "peer"_attr = peer,
+                              "flags"_attr = flagsToString(flags),
+                              "enableIPv6"_attr = enableIPv6,
+                              "duration"_attr = timeAfter - timeBefore,
+                              "log"_attr = "customer",
+                              "status"_attr = status
+                );
                 return _checkResults(status, peer);
             })
             .then([=](Results results) {
                 Date_t timeAfter = Date_t::now();
-                LOGV2_INFO(23019,
-                           "async DNS resolution finished, peer: {peer}, flags: {flags}, "
-                           "enableIPv6: {enableIPv6}, duration: {duration}",
-                           "async DNS resolution finished",
-                           "peer"_attr = peer,
-                           "flags"_attr = flagsToString(flags),
-                           "enableIPv6"_attr = enableIPv6,
-                           "duration"_attr = timeAfter - timeBefore);
+                LOGV2_WARNING(23019,
+                              "async DNS resolution finished, peer: {peer}, flags: {flags}, "
+                              "enableIPv6: {enableIPv6}, duration: {duration}",
+                              "async DNS resolution finished",
+                              "peer"_attr = peer,
+                              "flags"_attr = flagsToString(flags),
+                              "enableIPv6"_attr = enableIPv6,
+                              "log"_attr = "customer",
+                              "duration"_attr = timeAfter - timeBefore
+                );
                 return _makeFuture(results, peer);
             });
     }
@@ -662,13 +687,13 @@ StatusWith<SessionHandle> TransportLayerASIO::connect(
     auto swEndpoints = resolver.resolve(peer, _listenerOptions.enableIPv6);
     Date_t timeAfter = Date_t::now();
     if (timeAfter - timeBefore > kSlowOperationThreshold) {
-        LOGV2_WARNING(
-            23019,
-            "connect DNS resolution while connecting to {peer}, enableIPv6 {} took {duration}",
-            "connect DNS resolution while connecting to peer was slow",
-            "peer"_attr = peer,
-            "enableIPv6"_attr = _listenerOptions.enableIPv6,
-            "duration"_attr = timeAfter - timeBefore);
+        LOGV2_WARNING(23019,
+                      "connect DNS resolution while connecting to {peer}, enableIPv6 {} took {duration}",
+                      "connect DNS resolution while connecting to peer was slow",
+                      "peer"_attr = peer,
+                      "enableIPv6"_attr = _listenerOptions.enableIPv6,
+                      "log"_attr = "customer",
+                      "duration"_attr = timeAfter - timeBefore);
         networkCounter.incrementNumSlowDNSOperations();
     }
 
@@ -738,11 +763,11 @@ StatusWith<SessionHandle> TransportLayerASIO::connect(
 
         if (timeAfter - timeBefore > kSlowOperationThreshold) {
             LOGV2_WARNING(23019,
-                          "handshake DNS resolution while connecting to {peer}, enableIPv6 {} took "
-                          "{duration}",
+                          "handshake DNS resolution while connecting to {peer}, enableIPv6 {} took {duration}",
                           "handshake DNS resolution while connecting to peer was slow",
                           "peer"_attr = peer,
                           "enableIPv6"_attr = _listenerOptions.enableIPv6,
+                          "log"_attr = "customer",
                           "duration"_attr = timeAfter - timeBefore);
             networkCounter.incrementNumSlowSSLOperations();
         }
@@ -927,6 +952,8 @@ Future<SessionHandle> TransportLayerASIO::asyncConnect(
                                   "async DNS resolution while connecting to {peer} took {duration}",
                                   "async DNS resolution while connecting to peer was slow",
                                   "peer"_attr = connector->peer,
+                                  "log"_attr = "customer",
+                                  "result"_attr = results.front(),
                                   "duration"_attr = timeAfter - timeBefore);
                     networkCounter.incrementNumSlowDNSOperations();
                 }
@@ -985,12 +1012,11 @@ Future<SessionHandle> TransportLayerASIO::asyncConnect(
                     .then([connector, timeBefore] {
                         Date_t timeAfter = Date_t::now();
                         if (timeAfter - timeBefore > kSlowOperationThreshold) {
-                            LOGV2_WARNING(
-                                23019,
-                                "async handshake DNS resolution while connecting to {peer} took "
-                                "{duration}",
+                            LOGV2_WARNING(23019,
+                              "async handshake DNS resolution while connecting to {peer} took {duration}",
                                 "async handshake DNS resolution while connecting to peer was slow",
                                 "peer"_attr = connector->peer,
+                              "log"_attr = "customer",
                                 "duration"_attr = timeAfter - timeBefore);
                             networkCounter.incrementNumSlowSSLOperations();
                         }
