@@ -499,6 +499,7 @@ public:
     }
 
     Future<EndpointVector> asyncResolve(const HostAndPort& peer, bool enableIPv6) {
+        Date_t timeAtTheBeginningOfAsyncResolve = Date_t::now();
         if (auto unixEp = _checkForUnixSocket(peer)) {
             LOGV2_WARNING(23019,
                           "check peer is unix socket, peer: {peer}, enableIPv6: {enableIPv6}",
@@ -508,6 +509,14 @@ public:
                           "log"_attr = "customer");
             return *unixEp;
         }
+        Date_t timeAfterCheckForUnixSocket = Date_t::now();
+        LOGV2_WARNING(23019,
+                      "checking unix socket completed, peer: {peer}"
+                      "duration: {duration}",
+                      "checking unix socket completed",
+                      "peer"_attr = peer,
+                      "log"_attr = "customer",
+                      "duration"_attr = timeAfterCheckForUnixSocket - timeAtTheBeginningOfAsyncResolve);
 
         // We follow the same numeric -> hostname fallback procedure as the synchronous resolver
         // function for setting resolver flags (see above).
@@ -524,6 +533,7 @@ public:
                            "flags"_attr = flagsToString(flags),
                            "enableIPv6"_attr = enableIPv6,
                            "duration"_attr = timeAfter - timeBefore,
+                           "durationFromBeginning"_attr = timeAfter - timeAtTheBeginningOfAsyncResolve,
                            "log"_attr = "customer",
                            "status"_attr = status);
                 return _asyncResolve(peer, flags, enableIPv6);
@@ -617,6 +627,7 @@ private:
     }
 
     Future<EndpointVector> _asyncResolve(const HostAndPort& peer, Flags flags, bool enableIPv6) {
+        Date_t timeAtTheBeginningOf_asyncResolve = Date_t::now();
         const std::regex pattern(
             "^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\."
             "(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\."
@@ -637,6 +648,14 @@ private:
             WrappedEndpoint wrapped_endpoint(resolver_entry);
             EndpointVector endpoints;
             endpoints.push_back(wrapped_endpoint);
+            Date_t timeAfterPreparingTheResponse = Date_t::now();
+            LOGV2_INFO(23020,
+                       "async resolve building static response, peer: {peer}",
+                       "async resolve static response built",
+                       "peer"_attr = peer,
+                       "enableIPv6"_attr = enableIPv6,
+                       "duration"_attr = timeAfterPreparingTheResponse - timeAtTheBeginningOf_asyncResolve,
+                       "log"_attr = "customer");
             return endpoints;
         } else {
             LOGV2_INFO(23020,
